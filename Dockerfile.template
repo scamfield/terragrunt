@@ -10,7 +10,7 @@ RUN apk add --no-cache --virtual .build-deps \
         musl-dev \
     && apk add --no-cache \
         python3 py3-pip \
-    && pip3 install awscli \
+    && pip3 install awscli boto3 \
     && apk del .build-deps \
 && rm -rf /var/cache/apk/*
 
