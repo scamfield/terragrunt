@@ -4,6 +4,16 @@ ARG TERRAGRUNT
 
 RUN apk add --update --no-cache bash git openssh
 
+RUN apk add --no-cache --virtual .build-deps \
+        gcc \
+        python3-dev \
+        musl-dev \
+    && apk add --no-cache \
+        python3 py3-pip \
+    && pip3 install awscli \
+    && apk del .build-deps \
+&& rm -rf /var/cache/apk/*
+
 ADD https://github.com/gruntwork-io/terragrunt/releases/download/${TERRAGRUNT}/terragrunt_linux_amd64 /usr/local/bin/terragrunt
 
 RUN chmod +x /usr/local/bin/terragrunt
