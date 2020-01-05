@@ -2,7 +2,7 @@ FROM hashicorp/terraform:VERSION
 
 ARG TERRAGRUNT
 
-RUN apk add --update --no-cache bash git openssh
+RUN apk add --update --no-cache bash git openssh curl jq
 
 RUN apk add --no-cache --virtual .build-deps \
         gcc \
