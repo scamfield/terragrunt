@@ -18,10 +18,10 @@ process = subprocess.run(["terraform","fmt","-check","-diff","-recursive","."], 
 
 end = time.time()
 
-test_cases = [TestCase('Terraform', 'format', end - start, process.stdout, process.stderr)]
+test_cases = [TestCase('Terraform', 'format', end - start, None , process.stderr)]
 
 if process.returncode != 0:
-    test_cases[0].add_failure_info('terraform fmt check failed:\n{0}'.format(process.stdout))
+    test_cases[0].add_failure_info('terraform fmt check failed:\n\n'+ process.stdout)
     print('terraform fmt check failed', file=sys.stderr)
 else:
     print('terraform fmt check passed', file=sys.stderr)
