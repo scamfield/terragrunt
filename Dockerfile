@@ -33,7 +33,7 @@ ARG CONFTEST_VERSION
 ARG CONFTEST_SHA256
 ARG TERRAFORM_COMPLIANCE_VERSION
 
-RUN apk add --update --no-cache bash git openssh curl jq unzip libxml2 libxslt 
+RUN apk add --update --no-cache bash git openssh curl jq unzip libxml2 libxslt make
 RUN apk add --no-cache --virtual .build-deps \
         gcc \
         python3-dev \
