@@ -1,0 +1,42 @@
+#!/usr/bin/python3
+#
+# Wrapper around terraform fmt to give a nice junit output
+#
+#
+
+import os
+import sys
+import time
+import argparse
+import subprocess
+
+from junit_xml import TestSuite, TestCase
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--report", help="output junit report")
+args = parser.parse_args()
+
+start = time.time()
+
+process = subprocess.run(["terraform","fmt","-check","-diff","."], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+end = time.time()
+
+test_cases = [TestCase('Terraform', 'format', end - start, process.stdout, process.stderr)]
+
+if process.returncode != 0:
+    test_cases[0].add_failure_info('terraform fmt check failed')
+    print('terraform fmt check failed')
+else:
+    print('terraform fmt check passed')
+
+ts = TestSuite("Terraform", test_cases)
+
+if args.report:
+    with open(args.report,"w") as file:
+        file.write(TestSuite.to_xml_string([ts]))
+
+if 'DONT_FAIL_TF_FMT' in os.environ:
+    sys.exit()
+else:
+    sys.exit(process.returncode)

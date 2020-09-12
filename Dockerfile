@@ -33,14 +33,20 @@ ARG CONFTEST_VERSION
 ARG CONFTEST_SHA256
 ARG TERRAFORM_COMPLIANCE_VERSION
 
-RUN apk add --update --no-cache bash git openssh curl jq unzip
+RUN apk add --update --no-cache bash git openssh curl jq unzip libxml2 libxslt 
 RUN apk add --no-cache --virtual .build-deps \
         gcc \
         python3-dev \
         musl-dev \
+        libxml2-dev \
+        libxslt-dev \
     && apk add --no-cache \
         python3 py3-pip \
+    && pip3 install --upgrade pip \
     && pip3 install awscli boto3 \
+    && pip3 install terraform-compliance=="${TERRAFORM_COMPLIANCE_VERSION}" \
+    && pip3 uninstall -y radish radish-bdd \
+    && pip3 install radish radish-bdd \
     && echo "==> Downloading terragrunt..." \
     && curl -vfSL https://github.com/gruntwork-io/terragrunt/releases/download/v${TERRAGRUNT_VERSION}/terragrunt_linux_amd64 -o /usr/local/bin/terragrunt \
     && sha256sum /usr/local/bin/terragrunt \
@@ -63,15 +69,12 @@ RUN apk add --no-cache --virtual .build-deps \
     && echo "${TFLINT_SHA256}  /tmp/tflint.zip" | sha256sum -c - \
     && unzip /tmp/tflint.zip -d /usr/local/bin tflint \
     && chmod +x /usr/local/bin/tflint \
-    && pip install --upgrade pip \
-    && pip install terraform-compliance=="${TERRAFORM_COMPLIANCE_VERSION}" \
-    && pip uninstall -y radish radish-bdd \
-    && pip install radish radish-bdd \
     && apk del .build-deps \
     && rm -rf /var/cache/apk/* /tmp/*
 
 #
 COPY --from=builder /go/bin/go-getter /usr/local/bin/go-getter
+COPY  scripts/terraform-fmt-test /usr/local/bin/terraform-fmt-test
 
 WORKDIR /apps
 
