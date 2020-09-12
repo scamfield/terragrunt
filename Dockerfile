@@ -69,13 +69,14 @@ RUN apk add --no-cache --virtual .build-deps \
     && echo "${TFLINT_SHA256}  /tmp/tflint.zip" | sha256sum -c - \
     && unzip /tmp/tflint.zip -d /usr/local/bin tflint \
     && chmod +x /usr/local/bin/tflint \
+    && mkdir -p /code /reports \
     && apk del .build-deps \
-    && rm -rf /var/cache/apk/* /tmp/*
+    && rm -rf /var/cache/apk/* /tmp/* /root/.cache
 
 #
 COPY --from=builder /go/bin/go-getter /usr/local/bin/go-getter
 COPY  scripts/terraform-fmt-test /usr/local/bin/terraform-fmt-test
 
-WORKDIR /apps
+WORKDIR /code
 
 ENTRYPOINT []
