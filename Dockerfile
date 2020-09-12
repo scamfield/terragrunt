@@ -13,6 +13,8 @@ ARG TFSEC_SHA256="e5dfd73a286d8c57abce2545ac178ce76ec8e12fb13056039d85f7b250417c
 ARG CONFTEST_VERSION="0.20.0"
 ARG CONFTEST_SHA256="6647697fd811daa3fcd0777654181b5ad4d7dda67dcab358a01fc821801bc0a1"
 
+ARG TERRAFORM_COMPLIANCE_VERSION="1.3.4"
+
 FROM golang:alpine AS builder
 WORKDIR /go
 RUN apk add --update --no-cache bash git openssh
@@ -29,6 +31,7 @@ ARG TFSEC_VERSION
 ARG TFSEC_SHA256
 ARG CONFTEST_VERSION
 ARG CONFTEST_SHA256
+ARG TERRAFORM_COMPLIANCE_VERSION
 
 RUN apk add --update --no-cache bash git openssh curl jq unzip
 RUN apk add --no-cache --virtual .build-deps \
@@ -60,6 +63,10 @@ RUN apk add --no-cache --virtual .build-deps \
     && echo "${TFLINT_SHA256}  /tmp/tflint.zip" | sha256sum -c - \
     && unzip /tmp/tflint.zip -d /usr/local/bin tflint \
     && chmod +x /usr/local/bin/tflint \
+    && pip install --upgrade pip \
+    && pip install terraform-compliance=="${VERSION}" \
+    && pip uninstall -y radish radish-bdd \
+    && pip install radish radish-bdd \
     && apk del .build-deps \
     && rm -rf /var/cache/apk/* /tmp/*
 
