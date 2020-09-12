@@ -64,7 +64,7 @@ RUN apk add --no-cache --virtual .build-deps \
     && unzip /tmp/tflint.zip -d /usr/local/bin tflint \
     && chmod +x /usr/local/bin/tflint \
     && pip install --upgrade pip \
-    && pip install terraform-compliance=="${VERSION}" \
+    && pip install terraform-compliance=="${TERRAFORM_COMPLIANCE_VERSION}" \
     && pip uninstall -y radish radish-bdd \
     && pip install radish radish-bdd \
     && apk del .build-deps \
