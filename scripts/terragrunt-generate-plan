@@ -105,8 +105,8 @@ phases:
     commands:
       - export MODULE_ROOT=$(pwd)
       - echo buiding ${TERRAGRUNT_PATH}
-      - mkdir -p ${MODULE_SOURCE_PATH}
-      - ln -s ${MODULE_ROOT}/${MODULE_ARTIFACT_PATH} ${MODULE_SOURCE_PATH}
+      - ln -s ${MODULE_ROOT}/ ${MODULE_SOURCE_PATH}
+      - cd ${MODULE_SOURCE_PATH}
       - terragrunt plan -refresh=true -out=${MODULE_ROOT}/tfplan --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} --terragrunt-iam-role ${TG_ROLE} 2>&1
       - terragrunt show --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} -json ${MODULE_ROOT}/tfplan > ${MODULE_ROOT}/tfplan.json --terragrunt-iam-role ${TG_ROLE}
   post_build:
