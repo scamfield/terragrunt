@@ -1,0 +1,421 @@
+#!/usr/bin/python3
+#
+#
+#
+
+import subprocess
+import argparse
+import logging
+import zipfile
+import tempfile
+import shutil
+import boto3
+import json
+import time
+import sys
+import os
+
+from datetime import datetime
+from botocore.exceptions import ClientError
+
+from typing import List, Set, Dict, Tuple, Optional
+
+logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
+                    datefmt='%Y-%m-%dT%H:%M:%S%z', level=logging.INFO)
+
+#
+#
+#
+TEST_CONFIG = "tests/terragrunt-config.json"
+MODULE_DIRECTORY = "module"
+TERRAGRUNT_DIRECTORY = "terragrunt-repo"
+
+#
+#
+#
+
+
+def myconverter(o):
+    if isinstance(o, datetime):
+        return o.__str__()
+
+
+def zipdir(path: str, ziph: str):
+    # ziph is zipfile handle
+    for root, _, files in os.walk(path):
+        for file in files:
+            ziph.write(os.path.join(root, file))
+
+
+def build_zipfile(file: str, directory: str) -> None:
+
+    logging.debug('build_zipfile')
+
+    # build a zipfile of terraform working dir
+    os.chdir(directory)
+
+    zipf = zipfile.ZipFile(file, 'w', zipfile.ZIP_DEFLATED)
+    zipdir('.', zipf)
+    zipf.close()
+
+    return
+
+
+def role_arn_to_session(arn: str, session_name: str):
+    """
+    """
+    try:
+        client = boto3.client('sts')
+        response = client.assume_role(
+            RoleArn=arn, RoleSessionName=session_name)
+    except ClientError as e:
+        logger.error(e.response['Error']['Message'])
+        raise
+
+    return boto3.Session(
+        aws_access_key_id=response['Credentials']['AccessKeyId'],
+        aws_secret_access_key=response['Credentials']['SecretAccessKey'],
+        aws_session_token=response['Credentials']['SessionToken'])
+
+
+def trigger_codebuild(buildproject: str, role: str, modulepath: str, sourcepath: str, bucket: str, artifact: str):
+    """
+    """
+    try:
+        session = role_arn_to_session(
+            role, session_name="terragrunt_planner")
+
+        codebuild = session.client('codebuild')
+
+        logging.info(
+            "trigging codebuild using artifact {0} in bucket {1}".format(artifact, bucket))
+
+        buildspec_data = """
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "pre_build commands"
+      - export AWS_ACCESS_KEY_ID=$(curl --silent http://169.254.170.2:80$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | jq -r '.AccessKeyId')
+      - export AWS_SECRET_ACCESS_KEY=$(curl --silent http://169.254.170.2:80$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | jq -r '.SecretAccessKey')
+      - export AWS_SESSION_TOKEN=$(curl --silent http://169.254.170.2:80$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | jq -r '.Token')
+
+  build:
+    commands:
+      - export MODULE_ROOT=$(pwd)
+      - echo buiding ${TERRAGRUNT_PATH}
+      - mkdir -p ${MODULE_SOURCE_PATH}
+      - ln -s ${MODULE_ROOT}/${MODULE_ARTIFACT_PATH} ${MODULE_SOURCE_PATH}
+      - terragrunt plan -refresh=true -out=${MODULE_ROOT}/tfplan --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} --terragrunt-iam-role ${TG_ROLE} 2>&1
+      - terragrunt show --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} -json ${MODULE_ROOT}/tfplan > ${MODULE_ROOT}/tfplan.json --terragrunt-iam-role ${TG_ROLE}
+  post_build:
+    commands:
+      - echo "post_build commands"
+artifacts:
+  files:
+    - tfplan.json
+ """
+
+        response = codebuild.start_build(
+            projectName=buildproject,
+            sourceTypeOverride='S3',
+            sourceLocationOverride='{0}/{1}'.format(bucket, artifact),
+            buildspecOverride=buildspec_data,
+            artifactsOverride={
+                'type': 'S3',
+                'location': bucket,
+                'path': 'artifacts/{0}'.format(modulepath),
+                'name': os.path.basename(artifact),
+                'packaging': 'ZIP',
+                'overrideArtifactName': True
+            },
+            environmentVariablesOverride=[
+                {
+                    "name": 'TERRAGRUNT_PATH',
+                    "value": os.path.join(TERRAGRUNT_DIRECTORY, modulepath),
+                    "type": 'PLAINTEXT'
+                },
+                {
+                    "name": 'MODULE_SOURCE_PATH',
+                    "value": sourcepath,
+                    "type": 'PLAINTEXT'
+                },
+                {
+                    "name": 'MODULE_ARTIFACT_PATH',
+                    "value": MODULE_DIRECTORY,
+                    "type": 'PLAINTEXT'
+                }
+            ]
+        )
+
+        build = response.get('build')
+        build_id = build.get('id')
+
+        logging.info(
+            "codebuild {0[id]} triggered - status: {0[buildStatus]}".format(build))
+
+        # now wait the job to complete
+        while build.get('buildStatus') == 'IN_PROGRESS':
+
+            response = codebuild.batch_get_builds(ids=[build_id])
+
+            build = response.get('builds')[0]
+            logging.info(
+                "codebuild {0[id]} {0[currentPhase]} - status: {0[buildStatus]}".format(build))
+            time.sleep(5)
+
+        # do we want the result log
+        logconfig = build.get('logs')
+
+        download_logs(groupname=logconfig.get('groupName'),
+                      streamname=logconfig.get('streamName'))
+
+    except ClientError as e:
+        logging.fatal("unable to complete codebuild: {}".format(
+            e.response['Error']['Message']))
+
+    return 'artifacts/{0}/{1}'.format(modulepath, os.path.basename(artifact))
+
+
+def test_configuration(modulepath: str) -> Optional[Dict[str, str]]:
+
+    logging.debug('test_configuration')
+
+    config: Dict = None
+
+    config_filename: str = "{0}/{1}".format(
+        modulepath, TEST_CONFIG)
+
+    try:
+        with open(config_filename) as json_file:
+            config = json.load(json_file)
+    except FileNotFoundError:
+        logging.error(
+            "error opening configuration file {0} can't be found".format(config_filename))
+    except json.decoder.JSONDecodeError as e:
+        logging.error(
+            "error opening configuration file: {0} can't be decoded".format(e))
+
+    # configuration defaults
+    if 'terragruntrevision' not in config:
+        config['terragruntrevision'] = 'master'
+
+    # relative path to our module
+    return config
+
+
+def directory_revision(directory: str) -> str:
+
+    logging.debug('module_revision')
+
+    cur_dir = os.getcwd()
+
+    os.chdir(directory)
+
+    # root of our git repo
+    result = subprocess.run(
+        ['git', 'rev-parse', 'HEAD'], stdout=subprocess.PIPE)
+    repo_hash: str = result.stdout.decode('utf-8').rstrip()
+
+    os.chdir(cur_dir)
+
+    # relative path to our module
+    return repo_hash
+
+
+def terragrunt_init(workingdir: str, modulepath: str):
+
+    logging.debug('terragrunt_init')
+
+    # don't check s3 and dynamo status
+    os.environ["TERRAGRUNT_DISABLE_INIT"] = "true"
+
+    #
+    subprocess.run(['terragrunt', 'init',
+                    '--terragrunt-working-dir', workingdir,
+                    '--terragrunt-source', modulepath
+                    ])
+
+    return
+
+
+def upload_file(file: str, bucket: str, objectname: str) -> bool:
+
+    logging.debug('upload_file')
+
+    s3_client = boto3.client('s3')
+
+    try:
+        s3_client.upload_file(file.name, bucket, objectname)
+    except s3_client.exceptions.ClientError as e:
+        logging.fatal(e)
+        sys.exit(1)
+    return True
+
+
+def download_file(file: str, bucket: str, objectname: str) -> bool:
+
+    logging.debug('download_file')
+
+    s3_client = boto3.client('s3')
+
+    try:
+        s3_client.download_file(bucket, objectname, file)
+    except s3_client.exceptions.ClientError as e:
+        logging.fatal(e)
+        sys.exit(1)
+    return True
+
+
+def clone_terragrunt(destdir: str, terragruntsource: str, terragruntrevision: str) -> None:
+
+    logging.debug('clone_terragrunt')
+
+    logging.info('cloning terragrunt repo')
+
+    subprocess.check_output(
+        ['git', 'clone', terragruntsource, destdir])
+
+    logging.info('checking out {0}'.format(terragruntrevision))
+
+    subprocess.run(
+        ['git', '-C', destdir, 'checkout', terragruntrevision])
+
+    return
+
+
+def download_logs(groupname: str, streamname: str) -> None:
+
+    logging.debug('download_logs')
+
+    client = boto3.client('logs')
+
+    try:
+        response = client.get_log_events(
+            logGroupName=groupname,
+            logStreamName=streamname,
+        )
+
+        for event in response["events"]:
+            logging.info(event["message"].rstrip())
+
+    except ClientError as e:
+        logging.fatal(e)
+        sys.exit(1)
+    return
+
+
+def build_terragrunt_tree(terragruntsource: str, terragruntpath: str, terragruntrevision: str, modulepath: str) -> str:
+
+    logging.debug('build_terragrunt_tree')
+
+    module_rev: str = directory_revision(modulepath)
+
+    logging.info('terraform module revison: {0}'.format(module_rev))
+
+    tmpdirname = os.path.join(tempfile.gettempdir(), module_rev)
+
+    tfmodule_destdir = os.path.join(tmpdirname, MODULE_DIRECTORY)
+    tg_destdir = os.path.join(tmpdirname, TERRAGRUNT_DIRECTORY)
+
+    shutil.copytree(modulepath, tfmodule_destdir)
+
+    clone_terragrunt(destdir=tg_destdir,
+                     terragruntsource=terragruntsource,
+                     terragruntrevision=terragruntrevision)
+
+    terragrunt_rev: str = directory_revision(tg_destdir)
+
+    logging.info('terragrunt tree revison: {0}'.format(terragrunt_rev))
+
+    terragrunt_init(workingdir=os.path.join(tg_destdir, terragruntpath),
+                    modulepath='{0}//{1}'.format(tmpdirname, MODULE_DIRECTORY)
+                    )
+
+    # relative path to our module
+    return (tmpdirname, module_rev, terragrunt_rev)
+
+
+def process(arguments: Dict) -> None:
+
+    logging.info('generating terragrunt tree')
+
+    modulepath = os.path.abspath(arguments.modulepath)
+
+    testconfig = test_configuration(modulepath=modulepath)
+
+    if testconfig is None:
+        logging.info("no test configuration found - skipping plan")
+        return
+
+    (tgtree, module_rev, _) = build_terragrunt_tree(terragruntsource=testconfig['terragruntsource'],
+                                                    terragruntpath=testconfig['terragruntpath'],
+                                                    terragruntrevision=testconfig['terragruntrevision'],
+                                                    modulepath=modulepath
+                                                    )
+
+    with open('/tmp/{0}.zip'.format(module_rev), "wb") as tgzip:
+
+        # create zipfile of our module and upload
+        build_zipfile(tgzip, tgtree)
+
+    #
+    objectname = "{0}/{1}.zip".format(testconfig['terragruntpath'], module_rev)
+
+    logging.info("uploading artifact {0} to {1}".format(
+        objectname, arguments.bucket))
+
+    upload_file(file=tgzip, bucket=arguments.bucket, objectname=objectname)
+
+    shutil.rmtree(tgtree)
+
+    artifactobj = trigger_codebuild(buildproject=testconfig['planproject'],
+                                    role=testconfig['planrole'],
+                                    sourcepath=tgtree,
+                                    modulepath=testconfig['terragruntpath'],
+                                    bucket=arguments.bucket, artifact=objectname)
+
+    logging.info("terraform plan complete")
+
+    with tempfile.NamedTemporaryFile() as artifact:
+
+        logging.info("downloading artifact {0} to {1}".format(
+            artifactobj, arguments.bucket))
+
+        # create tarball of our module and upload
+        download_file(bucket=arguments.bucket,
+                      objectname=artifactobj, file=artifact.name)
+
+        with zipfile.ZipFile(artifact.name) as zip:
+            with zip.open('tfplan.json') as artifactplan:
+                with open(arguments.planpath, "wb") as planfile:
+                    planfile.write(artifactplan.read())
+
+    logging.info("wrote plan to: {0}".format(arguments.planpath))
+
+    return None
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(prog='generateplan')
+
+    parser.add_argument('--bucket', type=str, required=True,
+                        help='location of the bucket to store the terraform code')
+
+    parser.add_argument('--modulepath', type=str, required=True,
+                        help='location of the terraform module')
+
+    parser.add_argument('--planpath', type=str, required=True,
+                        help='location to output the plan')
+
+    parser.add_argument('--verbose', '-v', action='count', default=0)
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+
+    process(args)
