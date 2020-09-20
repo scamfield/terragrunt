@@ -18,7 +18,7 @@ import os
 from datetime import datetime
 from botocore.exceptions import ClientError
 
-from typing import List, Set, Dict, Tuple, Optional
+from typing import Any, List, Set, Dict, Tuple, Optional
 
 logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
                     datefmt='%Y-%m-%dT%H:%M:%S%z', level=logging.INFO)
@@ -168,7 +168,8 @@ artifacts:
         # do we want the result log
         logconfig = build.get('logs')
 
-        download_logs(groupname=logconfig.get('groupName'),
+        download_logs(session=session,
+                      groupname=logconfig.get('groupName'),
                       streamname=logconfig.get('streamName'))
 
     except ClientError as e:
@@ -190,16 +191,17 @@ def test_configuration(modulepath: str) -> Optional[Dict[str, str]]:
     try:
         with open(config_filename) as json_file:
             config = json.load(json_file)
+
+        # configuration defaults
+        if 'terragruntrevision' not in config:
+            config['terragruntrevision'] = 'master'
+
     except FileNotFoundError:
-        logging.error(
+        logging.warning(
             "error opening configuration file {0} can't be found".format(config_filename))
     except json.decoder.JSONDecodeError as e:
         logging.error(
             "error opening configuration file: {0} can't be decoded".format(e))
-
-    # configuration defaults
-    if 'terragruntrevision' not in config:
-        config['terragruntrevision'] = 'master'
 
     # relative path to our module
     return config
@@ -232,10 +234,10 @@ def terragrunt_init(workingdir: str, modulepath: str):
     os.environ["TERRAGRUNT_DISABLE_INIT"] = "true"
 
     #
-    subprocess.run(['terragrunt', 'init',
-                    '--terragrunt-working-dir', workingdir,
-                    '--terragrunt-source', modulepath
-                    ])
+    subprocess.check_output(['terragrunt', 'init',
+                             '--terragrunt-working-dir', workingdir,
+                             '--terragrunt-source', modulepath
+                             ])
 
     return
 
@@ -279,17 +281,17 @@ def clone_terragrunt(destdir: str, terragruntsource: str, terragruntrevision: st
 
     logging.info('checking out {0}'.format(terragruntrevision))
 
-    subprocess.run(
+    subprocess.check_output(
         ['git', '-C', destdir, 'checkout', terragruntrevision])
 
     return
 
 
-def download_logs(groupname: str, streamname: str) -> None:
+def download_logs(session: Any, groupname: str, streamname: str) -> None:
 
     logging.debug('download_logs')
 
-    client = boto3.client('logs')
+    client = session.client('logs')
 
     try:
         response = client.get_log_events(
