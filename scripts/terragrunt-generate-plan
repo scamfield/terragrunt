@@ -249,7 +249,7 @@ def upload_file(file: str, bucket: str, objectname: str) -> bool:
     s3_client = boto3.client('s3')
 
     try:
-        s3_client.upload_file(file.name, bucket, objectname, extra_args={
+        s3_client.upload_file(file.name, bucket, objectname, ExtraArgs={
                               'ServerSideEncryption': 'AES256'})
     except s3_client.exceptions.ClientError as e:
         logging.fatal(e)
