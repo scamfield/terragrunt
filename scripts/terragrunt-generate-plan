@@ -107,7 +107,7 @@ phases:
       - echo buiding ${TERRAGRUNT_PATH}
       - ln -s ${MODULE_ROOT}/ ${MODULE_SOURCE_PATH}
       - cd ${MODULE_SOURCE_PATH}
-      - terragrunt plan -refresh=true -out=${MODULE_ROOT}/tfplan --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} --terragrunt-iam-role ${TG_ROLE} 2>&1
+      - terragrunt plan -refresh=true -no-color -lock=false -input=false -out=${MODULE_ROOT}/tfplan --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} --terragrunt-iam-role ${TG_ROLE} 2>&1
       - terragrunt show --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} -json ${MODULE_ROOT}/tfplan > ${MODULE_ROOT}/tfplan.json --terragrunt-iam-role ${TG_ROLE}
   post_build:
     commands:
@@ -249,7 +249,8 @@ def upload_file(file: str, bucket: str, objectname: str) -> bool:
     s3_client = boto3.client('s3')
 
     try:
-        s3_client.upload_file(file.name, bucket, objectname)
+        s3_client.upload_file(file.name, bucket, objectname, extra_args={
+                              'ServerSideEncryption': 'AES256'})
     except s3_client.exceptions.ClientError as e:
         logging.fatal(e)
         sys.exit(1)
