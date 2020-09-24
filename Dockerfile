@@ -61,6 +61,7 @@ RUN apk add --no-cache --virtual .build-deps \
     && pip3 install terraform-compliance=="${TERRAFORM_COMPLIANCE_VERSION}" \
     && pip3 uninstall -y radish radish-bdd \
     && pip3 install radish radish-bdd \
+    && pip3 install junit2html \
     && echo "==> Downloading terragrunt..." \
     && curl -vfSL https://github.com/gruntwork-io/terragrunt/releases/download/v${TERRAGRUNT_VERSION}/terragrunt_linux_amd64 -o /usr/local/bin/terragrunt \
     && sha256sum /usr/local/bin/terragrunt \
