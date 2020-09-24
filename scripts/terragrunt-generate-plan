@@ -35,6 +35,27 @@ TERRAGRUNT_DIRECTORY = "terragrunt-repo"
 #
 
 
+def parse_arn(arn):
+    # http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html
+    elements = arn.split(':', 5)
+    result = {
+        'arn': elements[0],
+        'partition': elements[1],
+        'service': elements[2],
+        'region': elements[3],
+        'account': elements[4],
+        'resource': elements[5],
+        'resource_type': None
+    }
+    if '/' in result['resource']:
+        result['resource_type'], result['resource'] = result['resource'].split(
+            '/', 1)
+    elif ':' in result['resource']:
+        result['resource_type'], result['resource'] = result['resource'].split(
+            ':', 1)
+    return result
+
+
 def myconverter(o):
     if isinstance(o, datetime):
         return o.__str__()
@@ -78,7 +99,7 @@ def role_arn_to_session(arn: str, session_name: str):
         aws_session_token=response['Credentials']['SessionToken'])
 
 
-def trigger_codebuild(buildproject: str, role: str, modulepath: str, sourcepath: str, bucket: str, artifact: str):
+def trigger_codebuild(buildproject: str, role: str, modulepath: str, modulerev: str, sourcepath: str, bucket: str, artifact: str):
     """
     """
     try:
@@ -107,15 +128,14 @@ phases:
       - echo buiding ${TERRAGRUNT_PATH}
       - ln -s ${MODULE_ROOT}/ ${MODULE_SOURCE_PATH}
       - cd ${MODULE_SOURCE_PATH}
-      - terragrunt plan -refresh=true -no-color -lock=false -input=false -out=${MODULE_ROOT}/tfplan --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} --terragrunt-iam-role ${TG_ROLE} 2>&1
-      - terragrunt show --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_ARTIFACT_PATH} -json ${MODULE_ROOT}/tfplan > ${MODULE_ROOT}/tfplan.json --terragrunt-iam-role ${TG_ROLE}
-  post_build:
-    commands:
-      - echo "post_build commands"
-artifacts:
-  files:
-    - tfplan.json
+      - terragrunt plan -refresh=true -no-color -lock=false -input=false -out=${MODULE_ROOT}/tfplan --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_PATH} --terragrunt-iam-role ${TG_ROLE} 2>&1
+      - terragrunt show --terragrunt-working-dir ${TERRAGRUNT_PATH} --terragrunt-source ${MODULE_SOURCE_PATH}//${MODULE_PATH} -json ${MODULE_ROOT}/tfplan > ${MODULE_ROOT}/tfplan.json --terragrunt-iam-role ${TG_ROLE}
+      - aws s3 cp ${MODULE_ROOT}/tfplan.json s3://${OUTPUT_ARTIFACT_BUCKET}/${OUTPUT_ARTIFACT_PATH} --acl bucket-owner-full-control
+
  """
+
+        artifact_key = '{0}/artifacts/{1}/{2}.json'.format(
+            parse_arn(role).get('account'), modulepath, modulerev)
 
         response = codebuild.start_build(
             projectName=buildproject,
@@ -123,12 +143,7 @@ artifacts:
             sourceLocationOverride='{0}/{1}'.format(bucket, artifact),
             buildspecOverride=buildspec_data,
             artifactsOverride={
-                'type': 'S3',
-                'location': bucket,
-                'path': 'artifacts/{0}'.format(modulepath),
-                'name': os.path.basename(artifact),
-                'packaging': 'ZIP',
-                'overrideArtifactName': True
+                "type": "NO_ARTIFACTS",
             },
             environmentVariablesOverride=[
                 {
@@ -142,8 +157,18 @@ artifacts:
                     "type": 'PLAINTEXT'
                 },
                 {
-                    "name": 'MODULE_ARTIFACT_PATH',
+                    "name": 'MODULE_PATH',
                     "value": MODULE_DIRECTORY,
+                    "type": 'PLAINTEXT'
+                },
+                {
+                    "name": 'OUTPUT_ARTIFACT_BUCKET',
+                    "value": bucket,
+                    "type": 'PLAINTEXT'
+                },
+                {
+                    "name": 'OUTPUT_ARTIFACT_PATH',
+                    "value": artifact_key,
                     "type": 'PLAINTEXT'
                 }
             ]
@@ -176,7 +201,7 @@ artifacts:
         logging.fatal("unable to complete codebuild: {}".format(
             e.response['Error']['Message']))
 
-    return 'artifacts/{0}/{1}'.format(modulepath, os.path.basename(artifact))
+    return artifact_key
 
 
 def test_configuration(modulepath: str) -> Optional[Dict[str, str]]:
@@ -364,7 +389,11 @@ def process(arguments: Dict) -> None:
         build_zipfile(tgzip, tgtree)
 
     #
-    objectname = "{0}/{1}.zip".format(testconfig['terragruntpath'], module_rev)
+    objectname = "{0}/{1}/{2}.zip".format(
+        parse_arn(testconfig['planrole']).get('account'),
+        testconfig['terragruntpath'],
+        module_rev
+    )
 
     logging.info("uploading artifact {0} to {1}".format(
         objectname, arguments.bucket))
@@ -377,11 +406,12 @@ def process(arguments: Dict) -> None:
                                     role=testconfig['planrole'],
                                     sourcepath=tgtree,
                                     modulepath=testconfig['terragruntpath'],
+                                    modulerev=module_rev,
                                     bucket=arguments.bucket, artifact=objectname)
 
     logging.info("terraform plan complete")
 
-    with tempfile.NamedTemporaryFile() as artifact:
+    with open(arguments.planpath, "wb") as artifact:
 
         logging.info("downloading artifact {0} to {1}".format(
             artifactobj, arguments.bucket))
@@ -390,12 +420,7 @@ def process(arguments: Dict) -> None:
         download_file(bucket=arguments.bucket,
                       objectname=artifactobj, file=artifact.name)
 
-        with zipfile.ZipFile(artifact.name) as zip:
-            with zip.open('tfplan.json') as artifactplan:
-                with open(arguments.planpath, "wb") as planfile:
-                    planfile.write(artifactplan.read())
-
-    logging.info("wrote plan to: {0}".format(arguments.planpath))
+        logging.info("wrote plan to: {0}".format(arguments.planpath))
 
     return None
 
